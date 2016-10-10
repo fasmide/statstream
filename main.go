@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +29,8 @@ func main() {
 	for {
 		time.Sleep(time.Second)
 
-		findStats()
+		findNetStats()
+		findFlowStats()
 		payload, _ := json.Marshal(stats)
 
 		connLock.Lock()
@@ -49,13 +52,35 @@ type Stats struct {
 	TxBytes   uint64
 	RxPackets uint64
 	TxPackets uint64
+	Flows     uint64
 }
 
 var lastNetStat SingleNetStats
 var currentNetStat SingleNetStats
 var stats Stats
 
-func findStats() error {
+func findFlowStats() error {
+
+	file, err := os.Open("/proc/sys/net/netfilter/nf_conntrack_count")
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	data, err := ioutil.ReadAll(file)
+
+	stats.Flows, err = strconv.ParseUint(strings.Trim(string(data), "\n"), 10, 64)
+
+	if err != nil {
+		log.Fatalln("Cannot parse nf_conntrack_count: %s", err.Error())
+		return err
+	}
+
+	return nil
+}
+
+func findNetStats() error {
 
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
@@ -77,7 +102,7 @@ func findStats() error {
 
 			currentNetStat.ReadArray(data)
 		}
-		stats.Device = data[0]
+		stats.Device = strings.Trim(data[0], ":")
 	}
 
 	stats.RxBytes = currentNetStat.RxBytes - lastNetStat.RxBytes
