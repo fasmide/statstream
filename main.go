@@ -1,129 +1,69 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
-	"io/ioutil"
+	"flag"
 	"log"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
-
-func init() {
-	connections = make([]net.Conn, 0, 5)
-	stats = Stats{}
-}
 
 var (
 	connections []net.Conn
 	connLock    sync.Mutex
 )
 
+var listen *string = flag.String("listen", "192.168.1.1:1337", "Specify interface which statstream will listen")
+var statInterface *string = flag.String("interface", "enp1s0", "Specify interface which should have its stats collected")
+
+func init() {
+	flag.Parse()
+	connections = make([]net.Conn, 0, 5)
+}
+
 func main() {
+
+	stats := NewStats(*statInterface, 5)
+
 	go acceptConnections()
 
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(time.Millisecond * 200)
 
-		findNetStats()
-		findFlowStats()
+		if len(connections) == 0 {
+			continue
+		}
+
+		stats.findNetStats()
+		stats.findFlowStats()
 		payload, _ := json.Marshal(stats)
-
+		payload = append(payload, []byte("\n")...)
 		connLock.Lock()
 		for i, conn := range connections {
 			_, err := conn.Write(payload)
 			if err != nil {
-				log.Printf("Could not write to client %s: %s", conn.RemoteAddr(), err.Error())
+				log.Printf("Client disconnected: %s: %s", conn.RemoteAddr(), err.Error())
 				conn.Close()
 				connections = append(connections[:i], connections[i+1:]...)
+				if len(connections) == 0 {
+					log.Println("No clients left")
+				}
 			}
 		}
 		connLock.Unlock()
 	}
 }
 
-type Stats struct {
-	Device    string
-	RxBytes   uint64
-	TxBytes   uint64
-	RxPackets uint64
-	TxPackets uint64
-	Flows     uint64
-}
-
-var lastNetStat SingleNetStats
-var currentNetStat SingleNetStats
-var stats Stats
-
-func findFlowStats() error {
-
-	file, err := os.Open("/proc/sys/net/netfilter/nf_conntrack_count")
-	if err != nil {
-		return err
-	}
-
-	defer file.Close()
-
-	data, err := ioutil.ReadAll(file)
-
-	stats.Flows, err = strconv.ParseUint(strings.Trim(string(data), "\n"), 10, 64)
-
-	if err != nil {
-		log.Fatalln("Cannot parse nf_conntrack_count: %s", err.Error())
-		return err
-	}
-
-	return nil
-}
-
-func findNetStats() error {
-
-	file, err := os.Open("/proc/net/dev")
-	if err != nil {
-		return err
-	}
-
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		text := scanner.Text()
-
-		data := strings.Fields(strings.Trim(text, " "))
-		if len(data) != 17 {
-			continue
-		}
-
-		if strings.HasSuffix(data[0], ":") {
-
-			currentNetStat.ReadArray(data)
-		}
-		stats.Device = strings.Trim(data[0], ":")
-	}
-
-	stats.RxBytes = currentNetStat.RxBytes - lastNetStat.RxBytes
-	stats.TxBytes = currentNetStat.TxBytes - lastNetStat.TxBytes
-	stats.RxPackets = currentNetStat.RxPackets - lastNetStat.RxPackets
-	stats.TxPackets = currentNetStat.TxPackets - lastNetStat.TxPackets
-
-	lastNetStat = currentNetStat
-
-	return nil
-}
-
 func acceptConnections() {
-	l, err := net.Listen("tcp", ":1337")
+	l, err := net.Listen("tcp", *listen)
 
 	if err != nil {
 		log.Fatalln("Error listening:", err.Error())
 	}
 	// Close the listener when the application closes.
 	defer l.Close()
-	log.Println("Listening on :1337")
+	log.Println("Listening on", *listen)
 	for {
 
 		// Listen for an incoming connection.
@@ -139,7 +79,7 @@ func acceptConnections() {
 }
 
 func handleRequest(conn net.Conn) {
-	log.Printf("New conn from %s", conn.RemoteAddr().String())
+	log.Printf("Client connected: %s", conn.RemoteAddr().String())
 
 	connLock.Lock()
 	connections = append(connections, conn)
