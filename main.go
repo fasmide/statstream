@@ -31,10 +31,6 @@ func main() {
 	for {
 		time.Sleep(time.Millisecond * 200)
 
-		if len(connections) == 0 {
-			continue
-		}
-
 		stats.findNetStats()
 		stats.findFlowStats()
 		payload, _ := json.Marshal(stats)
